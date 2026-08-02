@@ -177,10 +177,11 @@
       <label style="font-size:0.9rem;font-weight:bold;">장소 검색해서 추가</label>
       <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
         구글 계정/API 키 없이 되는 무료 검색(OpenStreetMap)입니다. 검색 버튼을 누를 때만 조회돼요.
+        한글로 검색하면 자동으로 영어로 번역해서 찾아줍니다(해외 장소는 한글 이름이 없는 경우가 많아서).
       </p>
       <form class="add-form" id="place-search-form">
         <div class="row">
-          <input type="text" id="place-search-input" placeholder="장소 이름 영어/현지어로 (예: Tsukiji Market)" required>
+          <input type="text" id="place-search-input" placeholder="장소 이름 (한글 가능, 예: 츠키지 시장)" required>
           <button type="submit" style="flex:0 0 auto;">검색</button>
         </div>
       </form>
@@ -409,6 +410,19 @@ document.getElementById("refresh-rate-btn").addEventListener("click", fetchRate)
 // ── 장소 검색(Nominatim/OpenStreetMap) ───────────────────
 // 무료·무가입 검색 API. 정책상 "타이핑할 때마다 자동완성 조회"는 금지돼 있어서
 // (nominatim.org 사용정책 — Auto-complete search 항목 참고) 검색 버튼을 눌렀을 때만 호출한다.
+//
+// 해외(특히 일본) 장소는 OSM에 한글 이름이 거의 없어서 한글로 검색하면 결과가 안 나온다.
+// 입력에 한글이 섞여 있으면 무료 번역 API(MyMemory, 키 불필요)로 영어로 바꾼 뒤 검색한다.
+function containsKorean(text) {
+  return /[가-힣]/.test(text);
+}
+
+async function translateToEnglish(text) {
+  const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ko|en`);
+  const data = await res.json();
+  return (data.responseData && data.responseData.translatedText) ? data.responseData.translatedText : text;
+}
+
 document.getElementById("place-search-form").addEventListener("submit", async (evt) => {
   evt.preventDefault();
   const query = document.getElementById("place-search-input").value.trim();
@@ -420,12 +434,19 @@ document.getElementById("place-search-form").addEventListener("submit", async (e
   resultsEl.innerHTML = `<p class="empty-msg">검색 중...</p>`;
 
   try {
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=ko&addressdetails=1&q=${encodeURIComponent(query)}`;
+    let searchTerm = query;
+    if (containsKorean(query)) {
+      resultsEl.innerHTML = `<p class="empty-msg">번역 중...</p>`;
+      searchTerm = await translateToEnglish(query);
+      resultsEl.innerHTML = `<p class="empty-msg">번역: "${escapeHtml(query)}" → "${escapeHtml(searchTerm)}" · 검색 중...</p>`;
+    }
+
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=ko&addressdetails=1&q=${encodeURIComponent(searchTerm)}`;
     const res = await fetch(url);
     const results = await res.json();
 
     if (results.length === 0) {
-      resultsEl.innerHTML = `<p class="empty-msg">검색 결과가 없습니다.</p>`;
+      resultsEl.innerHTML = `<p class="empty-msg">검색 결과가 없습니다${searchTerm !== query ? ` ("${escapeHtml(searchTerm)}"로 검색함)` : ""}.</p>`;
       return;
     }
 
