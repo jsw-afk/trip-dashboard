@@ -82,6 +82,17 @@
   .saved-place-item:last-child { border-bottom: none; }
   .saved-place-name { font-weight: bold; font-size: 0.9rem; }
   .saved-place-address { font-size: 0.78rem; color: #888; }
+
+  .search-result-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid #f0f0f0; gap: 8px;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-name { font-size: 0.85rem; }
+  .search-result-item button {
+    flex-shrink: 0; border: none; background: #4caf50; color: white;
+    border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -163,7 +174,21 @@
     </div>
 
     <div class="card">
-      <label style="font-size:0.9rem;font-weight:bold;">구글 지도 저장한 장소 가져오기</label>
+      <label style="font-size:0.9rem;font-weight:bold;">장소 검색해서 추가</label>
+      <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
+        구글 계정/API 키 없이 되는 무료 검색(OpenStreetMap)입니다. 검색 버튼을 누를 때만 조회돼요.
+      </p>
+      <form class="add-form" id="place-search-form">
+        <div class="row">
+          <input type="text" id="place-search-input" placeholder="장소 이름 영어/현지어로 (예: Tsukiji Market)" required>
+          <button type="submit" style="flex:0 0 auto;">검색</button>
+        </div>
+      </form>
+      <div id="place-search-results"></div>
+    </div>
+
+    <div class="card">
+      <label style="font-size:0.9rem;font-weight:bold;">구글 지도 저장한 장소 가져오기 (선택)</label>
       <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
         구글 <a href="https://takeout.google.com/" target="_blank" rel="noopener">Takeout</a>에서
         "지도(내 장소)"만 선택해 내보낸 뒤, 압축을 풀면 나오는 <b>Saved Places.json</b> 파일을 선택하세요.
@@ -380,6 +405,59 @@ function renderRateInfo() {
 }
 
 document.getElementById("refresh-rate-btn").addEventListener("click", fetchRate);
+
+// ── 장소 검색(Nominatim/OpenStreetMap) ───────────────────
+// 무료·무가입 검색 API. 정책상 "타이핑할 때마다 자동완성 조회"는 금지돼 있어서
+// (nominatim.org 사용정책 — Auto-complete search 항목 참고) 검색 버튼을 눌렀을 때만 호출한다.
+document.getElementById("place-search-form").addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const query = document.getElementById("place-search-input").value.trim();
+  if (!query) return;
+
+  const resultsEl = document.getElementById("place-search-results");
+  const submitBtn = evt.target.querySelector("button[type=submit]");
+  submitBtn.disabled = true;
+  resultsEl.innerHTML = `<p class="empty-msg">검색 중...</p>`;
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=ko&addressdetails=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url);
+    const results = await res.json();
+
+    if (results.length === 0) {
+      resultsEl.innerHTML = `<p class="empty-msg">검색 결과가 없습니다.</p>`;
+      return;
+    }
+
+    resultsEl.innerHTML = results.map((r, i) => `
+      <div class="search-result-item" data-index="${i}">
+        <span class="search-result-name">${escapeHtml(r.display_name)}</span>
+        <button type="button" class="add-search-result-btn">추가</button>
+      </div>`).join("");
+
+    resultsEl.querySelectorAll(".add-search-result-btn").forEach((btn, i) => {
+      btn.addEventListener("click", () => {
+        const r = results[i];
+        const name = query; // 목록에서 자동완성될 이름은 사용자가 검색한 짧은 이름으로
+        if (!savedPlaces.some((p) => p.name === name)) {
+          savedPlaces.push({
+            id: `${r.lat},${r.lon}`, name, address: r.display_name,
+            lat: parseFloat(r.lat), lng: parseFloat(r.lon),
+          });
+          localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
+          renderSavedPlaces();
+          renderPlacesDatalist();
+          refreshMarkers();
+        }
+        resultsEl.innerHTML = `<p class="empty-msg">"${escapeHtml(name)}" 추가 완료! 저장된 장소 목록에서 확인하세요.</p>`;
+      });
+    });
+  } catch (err) {
+    resultsEl.innerHTML = `<p class="empty-msg">검색 중 오류가 발생했습니다.</p>`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
 
 // ── 지도 / 저장된 장소 가져오기 ───────────────────────────
 // 구글 Takeout의 "Saved Places.json"은 GeoJSON이지만, 내보낸 시점에 따라 필드 이름
