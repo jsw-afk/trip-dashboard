@@ -71,6 +71,15 @@
   .expense-amount { text-align: right; }
   .expense-amount .jpy { font-weight: bold; }
   .expense-amount .krw { font-size: 0.75rem; color: #888; }
+
+  #map { width: 100%; height: 320px; border-radius: 8px; background: #eee; }
+  .saved-place-item {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 8px 0; border-bottom: 1px solid #f0f0f0; gap: 8px;
+  }
+  .saved-place-item:last-child { border-bottom: none; }
+  .saved-place-name { font-weight: bold; font-size: 0.9rem; }
+  .saved-place-address { font-size: 0.78rem; color: #888; }
 </style>
 </head>
 <body>
@@ -80,6 +89,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="itinerary">📅 일정</button>
     <button class="tab-btn" data-tab="budget">💰 예산</button>
+    <button class="tab-btn" data-tab="map">🗺️ 지도</button>
   </div>
 
   <!-- 일정 -->
@@ -91,8 +101,9 @@
       <form class="add-form" id="itinerary-form">
         <div class="row">
           <input type="time" id="item-time" required>
-          <input type="text" id="item-place" placeholder="장소 (필수)" required>
+          <input type="text" id="item-place" placeholder="장소 (필수, 저장된 장소 자동완성됨)" list="saved-places-datalist" required>
         </div>
+        <datalist id="saved-places-datalist"></datalist>
         <textarea id="item-memo" placeholder="메모 (이동시간, 영업시간, 준비물 등)" rows="2"></textarea>
         <button type="submit">일정 추가</button>
       </form>
@@ -142,21 +153,58 @@
       </form>
     </div>
   </section>
+
+  <!-- 지도 -->
+  <section id="panel-map" class="panel">
+    <div class="card">
+      <div id="map"></div>
+      <p id="map-fallback-msg" class="empty-msg" hidden>
+        구글 지도 API 키가 아직 설정되지 않았습니다. index.html의 GOOGLE_MAPS_API_KEY를 채워주세요.
+      </p>
+    </div>
+
+    <div class="card">
+      <label style="font-size:0.9rem;font-weight:bold;">구글 지도 저장한 장소 가져오기</label>
+      <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
+        구글 <a href="https://takeout.google.com/" target="_blank" rel="noopener">Takeout</a>에서
+        "지도(내 장소)"만 선택해 내보낸 뒤, 압축을 풀면 나오는 <b>Saved Places.json</b> 파일을 선택하세요.
+      </p>
+      <input type="file" id="places-file-input" accept=".json">
+      <p id="import-status" style="font-size:0.8rem;color:#888;margin-top:6px;"></p>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-weight:bold;font-size:0.9rem;">저장된 장소 (<span id="saved-places-count">0</span>)</span>
+        <button type="button" id="clear-places-btn" style="border:none;background:#eee;border-radius:6px;padding:4px 10px;font-size:0.75rem;cursor:pointer;">전체 삭제</button>
+      </div>
+      <div id="saved-places-list"></div>
+      <p class="empty-msg" id="saved-places-empty">가져온 장소가 없습니다.</p>
+    </div>
+  </section>
 </main>
 
 <script>
+// 구글 지도 API 키. console.cloud.google.com 에서 Maps JavaScript API 사용 설정 후 발급받은 키를
+// 여기 채워 넣으면 지도가 활성화된다(정적 페이지라 키가 소스에 그대로 노출되므로, 발급 시 반드시
+// HTTP 리퍼러 제한을 이 사이트 도메인으로 걸어둘 것 — README 참고).
+const GOOGLE_MAPS_API_KEY = "";
+const DAY_COLORS = ["#e53935", "#1e88e5", "#43a047", "#fb8c00", "#8e24aa"];
+
 const DAY_COUNT = 5;
 const STORAGE_KEYS = {
   itinerary: "trip_itinerary_v1",
   expenses: "trip_expenses_v1",
   budgetLimit: "trip_budget_limit_v1",
   rate: "trip_jpy_krw_rate_v1",
+  places: "trip_saved_places_v1",
 };
 
 let currentDay = 1;
 let itinerary = JSON.parse(localStorage.getItem(STORAGE_KEYS.itinerary) || "{}");
 let expenses = JSON.parse(localStorage.getItem(STORAGE_KEYS.expenses) || "[]");
 let jpyToKrwRate = JSON.parse(localStorage.getItem(STORAGE_KEYS.rate) || "null");
+let savedPlaces = JSON.parse(localStorage.getItem(STORAGE_KEYS.places) || "[]");
 
 // ── 탭 전환 ──────────────────────────────────────────
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -192,7 +240,7 @@ function renderItinerary() {
     <div class="card item-row" data-id="${item.id}">
       <div class="item-time">${item.time}</div>
       <div class="item-main">
-        <div class="item-place">${escapeHtml(item.place)}</div>
+        <div class="item-place">${escapeHtml(item.place)}${item.lat ? " 📍" : ""}</div>
         ${item.memo ? `<div class="item-memo">${escapeHtml(item.memo)}</div>` : ""}
       </div>
       <div class="item-actions"><button type="button" class="delete-item-btn">삭제</button></div>
@@ -206,12 +254,20 @@ document.getElementById("itinerary-form").addEventListener("submit", (evt) => {
   const memo = document.getElementById("item-memo").value.trim();
   if (!time || !place) return;
 
+  // 저장된 장소 목록과 이름이 정확히 일치하면 좌표를 같이 붙여서 지도에도 표시되게 한다.
+  const matched = savedPlaces.find((p) => p.name === place);
+
   if (!itinerary[currentDay]) itinerary[currentDay] = [];
-  itinerary[currentDay].push({ id: Date.now(), time, place, memo });
+  itinerary[currentDay].push({
+    id: Date.now(), time, place, memo,
+    lat: matched ? matched.lat : null,
+    lng: matched ? matched.lng : null,
+  });
   localStorage.setItem(STORAGE_KEYS.itinerary, JSON.stringify(itinerary));
 
   evt.target.reset();
   renderItinerary();
+  refreshMarkers();
 });
 
 document.getElementById("itinerary-list").addEventListener("click", (evt) => {
@@ -220,6 +276,7 @@ document.getElementById("itinerary-list").addEventListener("click", (evt) => {
   itinerary[currentDay] = (itinerary[currentDay] || []).filter((i) => i.id !== id);
   localStorage.setItem(STORAGE_KEYS.itinerary, JSON.stringify(itinerary));
   renderItinerary();
+  refreshMarkers();
 });
 
 // ── 예산 ────────────────────────────────────────────
@@ -321,6 +378,167 @@ function renderRateInfo() {
 
 document.getElementById("refresh-rate-btn").addEventListener("click", fetchRate);
 
+// ── 지도 / 저장된 장소 가져오기 ───────────────────────────
+// 구글 Takeout의 "Saved Places.json"은 GeoJSON이지만, 내보낸 시점에 따라 필드 이름
+// 대소문자가 조금씩 달랐던 이력이 있어서(location.name / Location["Business Name"] 등)
+// 여러 케이스를 다 시도해본다. 좌표가 [0,0]으로 나오는 건 알려진 Takeout 버그라 걸러낸다.
+function parseTakeoutPlaces(json) {
+  if (!json || !Array.isArray(json.features)) return [];
+  const places = [];
+  for (const feature of json.features) {
+    const coords = feature.geometry && feature.geometry.coordinates;
+    if (!coords || coords.length < 2) continue;
+    const [lng, lat] = coords;
+    if (!lat && !lng) continue;
+
+    const props = feature.properties || {};
+    const loc = props.location || props.Location || {};
+    const name = loc.name || loc["Business Name"] || props.title || props.Title || "이름 없음";
+    const address = loc.address || loc["Address"] || "";
+
+    places.push({ id: `${lat},${lng}`, name, address, lat, lng });
+  }
+  return places;
+}
+
+document.getElementById("places-file-input").addEventListener("change", async (evt) => {
+  const file = evt.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById("import-status");
+  try {
+    const json = JSON.parse(await file.text());
+    const parsed = parseTakeoutPlaces(json);
+    if (parsed.length === 0) {
+      statusEl.textContent = "가져올 수 있는 장소가 없습니다. Saved Places.json 파일이 맞는지 확인해주세요.";
+      return;
+    }
+    const existingNames = new Set(savedPlaces.map((p) => p.name));
+    const newOnes = parsed.filter((p) => !existingNames.has(p.name));
+    savedPlaces = savedPlaces.concat(newOnes);
+    localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
+    statusEl.textContent = `${newOnes.length}개 장소를 새로 가져왔습니다 (전체 ${parsed.length}개 중 중복 제외).`;
+    renderSavedPlaces();
+    renderPlacesDatalist();
+    refreshMarkers();
+  } catch (err) {
+    statusEl.textContent = "파일을 읽는 중 오류가 발생했습니다: " + err.message;
+  } finally {
+    evt.target.value = "";
+  }
+});
+
+function renderSavedPlaces() {
+  document.getElementById("saved-places-count").textContent = savedPlaces.length;
+  const list = document.getElementById("saved-places-list");
+  document.getElementById("saved-places-empty").hidden = savedPlaces.length > 0;
+  list.innerHTML = savedPlaces.map((p) => `
+    <div class="saved-place-item" data-id="${p.id}">
+      <div>
+        <div class="saved-place-name">${escapeHtml(p.name)}</div>
+        ${p.address ? `<div class="saved-place-address">${escapeHtml(p.address)}</div>` : ""}
+      </div>
+      <div class="item-actions"><button type="button" class="delete-place-btn">삭제</button></div>
+    </div>`).join("");
+}
+
+function renderPlacesDatalist() {
+  document.getElementById("saved-places-datalist").innerHTML =
+    savedPlaces.map((p) => `<option value="${escapeHtml(p.name)}">`).join("");
+}
+
+document.getElementById("saved-places-list").addEventListener("click", (evt) => {
+  if (!evt.target.classList.contains("delete-place-btn")) return;
+  const id = evt.target.closest(".saved-place-item").dataset.id;
+  savedPlaces = savedPlaces.filter((p) => p.id !== id);
+  localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
+  renderSavedPlaces();
+  renderPlacesDatalist();
+  refreshMarkers();
+});
+
+document.getElementById("clear-places-btn").addEventListener("click", () => {
+  if (savedPlaces.length === 0 || !confirm("저장된 장소를 전부 삭제할까요?")) return;
+  savedPlaces = [];
+  localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
+  renderSavedPlaces();
+  renderPlacesDatalist();
+  refreshMarkers();
+});
+
+// ── 구글 지도 ────────────────────────────────────────
+let map = null;
+let mapMarkers = [];
+
+function loadGoogleMaps() {
+  if (!GOOGLE_MAPS_API_KEY) {
+    document.getElementById("map").hidden = true;
+    document.getElementById("map-fallback-msg").hidden = false;
+    return;
+  }
+  const script = document.createElement("script");
+  script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&callback=initMap`;
+  script.async = true;
+  document.head.appendChild(script);
+}
+
+// Google Maps JS API가 로드를 마치면 콜백으로 이 전역 함수를 호출한다.
+window.initMap = function () {
+  map = new google.maps.Map(document.getElementById("map"), {
+    center: { lat: 35.6812, lng: 139.7671 }, // 도쿄역 기준 초기 중심
+    zoom: 12,
+  });
+  refreshMarkers();
+};
+
+function refreshMarkers() {
+  if (!map) return;
+  mapMarkers.forEach((m) => m.setMap(null));
+  mapMarkers = [];
+
+  // 저장된 장소: 회색 점
+  savedPlaces.forEach((p) => {
+    const marker = new google.maps.Marker({
+      position: { lat: p.lat, lng: p.lng },
+      map,
+      title: p.name,
+      icon: { url: "https://maps.google.com/mapfiles/ms/icons/gray-dot.png" },
+    });
+    marker.addListener("click", () => {
+      new google.maps.InfoWindow({
+        content: `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.address || "")}`,
+      }).open(map, marker);
+    });
+    mapMarkers.push(marker);
+  });
+
+  // 일정에 좌표가 연결된 항목: 날짜별 색상 원 + 숫자 라벨
+  for (let d = 1; d <= DAY_COUNT; d++) {
+    (itinerary[d] || []).forEach((item) => {
+      if (!item.lat || !item.lng) return;
+      const marker = new google.maps.Marker({
+        position: { lat: item.lat, lng: item.lng },
+        map,
+        title: `Day${d} ${item.time} ${item.place}`,
+        label: { text: String(d), color: "white", fontSize: "11px" },
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 10,
+          fillColor: DAY_COLORS[d - 1],
+          fillOpacity: 1,
+          strokeColor: "white",
+          strokeWeight: 2,
+        },
+      });
+      marker.addListener("click", () => {
+        new google.maps.InfoWindow({
+          content: `<b>Day${d} ${item.time}</b><br>${escapeHtml(item.place)}`,
+        }).open(map, marker);
+      });
+      mapMarkers.push(marker);
+    });
+  }
+}
+
 // ── 유틸 ────────────────────────────────────────────
 function escapeHtml(text) {
   const div = document.createElement("div");
@@ -333,6 +551,9 @@ renderDayTabs();
 renderItinerary();
 renderRateInfo();
 renderExpenses();
+renderSavedPlaces();
+renderPlacesDatalist();
+loadGoogleMaps();
 if (!jpyToKrwRate) fetchRate();
 </script>
 </body>
