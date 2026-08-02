@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>4박5일 여행 대시보드</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Malgun Gothic", -apple-system, sans-serif;
+    background: #f4f4f4;
+    margin: 0;
+    padding: 16px 12px 48px;
+    color: #222;
+  }
+  main { max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 1.2rem; text-align: center; margin: 4px 0 16px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tab-btn {
+    flex: 1; padding: 10px; border: none; border-radius: 8px;
+    background: #e0e0e0; color: #444; font-size: 0.95rem; cursor: pointer;
+  }
+  .tab-btn.active { background: #4caf50; color: white; font-weight: bold; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .day-tabs { display: flex; gap: 4px; margin-bottom: 12px; overflow-x: auto; }
+  .day-btn {
+    flex-shrink: 0; padding: 6px 14px; border: 1px solid #ccc; border-radius: 999px;
+    background: white; color: #555; font-size: 0.85rem; cursor: pointer;
+  }
+  .day-btn.active { background: #1565c0; color: white; border-color: #1565c0; }
+
+  .card {
+    background: white; border-radius: 10px; padding: 14px;
+    margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .item-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .item-time { font-weight: bold; color: #1565c0; font-size: 0.9rem; min-width: 48px; }
+  .item-main { flex: 1; }
+  .item-place { font-weight: bold; }
+  .item-memo { font-size: 0.85rem; color: #666; margin-top: 2px; white-space: pre-wrap; }
+  .item-actions button {
+    background: none; border: none; color: #999; font-size: 0.85rem; cursor: pointer; padding: 2px 4px;
+  }
+
+  form.add-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  form.add-form input, form.add-form select, form.add-form textarea {
+    padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 0.9rem; font-family: inherit;
+  }
+  form.add-form .row { display: flex; gap: 6px; }
+  form.add-form .row input { flex: 1; }
+  form.add-form button {
+    padding: 10px; border: none; border-radius: 6px; background: #4caf50; color: white;
+    font-size: 0.9rem; cursor: pointer;
+  }
+
+  .empty-msg { color: #999; text-align: center; padding: 12px 0; font-size: 0.9rem; }
+
+  .budget-summary { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.95rem; }
+  .budget-summary .label { color: #666; }
+  .budget-total { font-size: 1.3rem; font-weight: bold; color: #d32f2f; }
+  .rate-line { font-size: 0.8rem; color: #888; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; }
+  .rate-line button { border: none; background: #eee; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; cursor: pointer; }
+
+  .expense-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+  .expense-item:last-child { border-bottom: none; }
+  .expense-cat { font-size: 0.75rem; background: #eee; border-radius: 4px; padding: 1px 6px; margin-left: 6px; color: #555; }
+  .expense-amount { text-align: right; }
+  .expense-amount .jpy { font-weight: bold; }
+  .expense-amount .krw { font-size: 0.75rem; color: #888; }
+</style>
+</head>
+<body>
+<main>
+  <h1>✈️ 4박5일 여행 대시보드</h1>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="itinerary">📅 일정</button>
+    <button class="tab-btn" data-tab="budget">💰 예산</button>
+  </div>
+
+  <!-- 일정 -->
+  <section id="panel-itinerary" class="panel active">
+    <div class="day-tabs" id="day-tabs"></div>
+    <div id="itinerary-list"></div>
+
+    <div class="card">
+      <form class="add-form" id="itinerary-form">
+        <div class="row">
+          <input type="time" id="item-time" required>
+          <input type="text" id="item-place" placeholder="장소 (필수)" required>
+        </div>
+        <textarea id="item-memo" placeholder="메모 (이동시간, 영업시간, 준비물 등)" rows="2"></textarea>
+        <button type="submit">일정 추가</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- 예산 -->
+  <section id="panel-budget" class="panel">
+    <div class="card">
+      <div class="budget-summary">
+        <span class="label">예산</span>
+        <span><input type="number" id="budget-limit" placeholder="0" style="width:100px;text-align:right;border:1px solid #ccc;border-radius:4px;padding:2px 6px;"> 원</span>
+      </div>
+      <div class="budget-summary">
+        <span class="label">총 지출</span>
+        <span class="budget-total" id="total-krw">0원</span>
+      </div>
+      <div class="budget-summary">
+        <span class="label">남은 예산</span>
+        <span id="remaining-krw">-</span>
+      </div>
+      <div class="rate-line">
+        <span id="rate-info">환율 불러오는 중...</span>
+        <button id="refresh-rate-btn" type="button">환율 새로고침</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="expense-list"></div>
+      <p class="empty-msg" id="expense-empty" hidden>지출 내역이 없습니다.</p>
+    </div>
+
+    <div class="card">
+      <form class="add-form" id="expense-form">
+        <input type="text" id="expense-name" placeholder="항목 (예: 스시 오마카세)" required>
+        <div class="row">
+          <input type="number" id="expense-amount" placeholder="금액(엔)" required min="0">
+          <select id="expense-category">
+            <option value="식비">🍜 식비</option>
+            <option value="교통">🚃 교통</option>
+            <option value="쇼핑">🛍️ 쇼핑</option>
+            <option value="숙소">🏨 숙소</option>
+            <option value="기타">📌 기타</option>
+          </select>
+        </div>
+        <button type="submit">지출 추가</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const DAY_COUNT = 5;
+const STORAGE_KEYS = {
+  itinerary: "trip_itinerary_v1",
+  expenses: "trip_expenses_v1",
+  budgetLimit: "trip_budget_limit_v1",
+  rate: "trip_jpy_krw_rate_v1",
+};
+
+let currentDay = 1;
+let itinerary = JSON.parse(localStorage.getItem(STORAGE_KEYS.itinerary) || "{}");
+let expenses = JSON.parse(localStorage.getItem(STORAGE_KEYS.expenses) || "[]");
+let jpyToKrwRate = JSON.parse(localStorage.getItem(STORAGE_KEYS.rate) || "null");
+
+// ── 탭 전환 ──────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(`panel-${btn.dataset.tab}`).classList.add("active");
+  });
+});
+
+// ── 일정 ────────────────────────────────────────────
+function renderDayTabs() {
+  const wrap = document.getElementById("day-tabs");
+  wrap.innerHTML = "";
+  for (let d = 1; d <= DAY_COUNT; d++) {
+    const btn = document.createElement("button");
+    btn.className = "day-btn" + (d === currentDay ? " active" : "");
+    btn.textContent = `Day ${d}`;
+    btn.addEventListener("click", () => { currentDay = d; renderDayTabs(); renderItinerary(); });
+    wrap.appendChild(btn);
+  }
+}
+
+function renderItinerary() {
+  const list = document.getElementById("itinerary-list");
+  const items = (itinerary[currentDay] || []).slice().sort((a, b) => a.time.localeCompare(b.time));
+  if (items.length === 0) {
+    list.innerHTML = `<p class="empty-msg">Day ${currentDay} 일정이 없습니다. 아래에서 추가해보세요.</p>`;
+    return;
+  }
+  list.innerHTML = items.map((item) => `
+    <div class="card item-row" data-id="${item.id}">
+      <div class="item-time">${item.time}</div>
+      <div class="item-main">
+        <div class="item-place">${escapeHtml(item.place)}</div>
+        ${item.memo ? `<div class="item-memo">${escapeHtml(item.memo)}</div>` : ""}
+      </div>
+      <div class="item-actions"><button type="button" class="delete-item-btn">삭제</button></div>
+    </div>`).join("");
+}
+
+document.getElementById("itinerary-form").addEventListener("submit", (evt) => {
+  evt.preventDefault();
+  const time = document.getElementById("item-time").value;
+  const place = document.getElementById("item-place").value.trim();
+  const memo = document.getElementById("item-memo").value.trim();
+  if (!time || !place) return;
+
+  if (!itinerary[currentDay]) itinerary[currentDay] = [];
+  itinerary[currentDay].push({ id: Date.now(), time, place, memo });
+  localStorage.setItem(STORAGE_KEYS.itinerary, JSON.stringify(itinerary));
+
+  evt.target.reset();
+  renderItinerary();
+});
+
+document.getElementById("itinerary-list").addEventListener("click", (evt) => {
+  if (!evt.target.classList.contains("delete-item-btn")) return;
+  const id = Number(evt.target.closest(".card").dataset.id);
+  itinerary[currentDay] = (itinerary[currentDay] || []).filter((i) => i.id !== id);
+  localStorage.setItem(STORAGE_KEYS.itinerary, JSON.stringify(itinerary));
+  renderItinerary();
+});
+
+// ── 예산 ────────────────────────────────────────────
+const budgetLimitInput = document.getElementById("budget-limit");
+budgetLimitInput.value = localStorage.getItem(STORAGE_KEYS.budgetLimit) || "";
+budgetLimitInput.addEventListener("input", () => {
+  localStorage.setItem(STORAGE_KEYS.budgetLimit, budgetLimitInput.value);
+  renderBudgetSummary();
+});
+
+function renderExpenses() {
+  const list = document.getElementById("expense-list");
+  const emptyMsg = document.getElementById("expense-empty");
+  emptyMsg.hidden = expenses.length > 0;
+
+  list.innerHTML = expenses.slice().reverse().map((e) => {
+    const krw = jpyToKrwRate ? Math.round(e.amountJpy * jpyToKrwRate.rate) : null;
+    return `
+    <div class="expense-item" data-id="${e.id}">
+      <div>
+        ${escapeHtml(e.name)}
+        <span class="expense-cat">${e.category}</span>
+      </div>
+      <div class="expense-amount">
+        <div class="jpy">¥${e.amountJpy.toLocaleString()}</div>
+        ${krw !== null ? `<div class="krw">≈ ${krw.toLocaleString()}원</div>` : ""}
+      </div>
+      <div class="item-actions"><button type="button" class="delete-expense-btn">삭제</button></div>
+    </div>`;
+  }).join("");
+
+  renderBudgetSummary();
+}
+
+function renderBudgetSummary() {
+  const totalJpy = expenses.reduce((sum, e) => sum + e.amountJpy, 0);
+  const totalKrw = jpyToKrwRate ? Math.round(totalJpy * jpyToKrwRate.rate) : null;
+  document.getElementById("total-krw").textContent =
+    totalKrw !== null ? `¥${totalJpy.toLocaleString()} (≈ ${totalKrw.toLocaleString()}원)` : `¥${totalJpy.toLocaleString()}`;
+
+  const limit = Number(budgetLimitInput.value) || 0;
+  const remainingEl = document.getElementById("remaining-krw");
+  if (limit > 0 && totalKrw !== null) {
+    const remaining = limit - totalKrw;
+    remainingEl.textContent = `${remaining.toLocaleString()}원`;
+    remainingEl.style.color = remaining < 0 ? "#d32f2f" : "#1565c0";
+  } else {
+    remainingEl.textContent = "-";
+  }
+}
+
+document.getElementById("expense-form").addEventListener("submit", (evt) => {
+  evt.preventDefault();
+  const name = document.getElementById("expense-name").value.trim();
+  const amountJpy = Number(document.getElementById("expense-amount").value);
+  const category = document.getElementById("expense-category").value;
+  if (!name || !amountJpy) return;
+
+  expenses.push({ id: Date.now(), name, amountJpy, category });
+  localStorage.setItem(STORAGE_KEYS.expenses, JSON.stringify(expenses));
+
+  evt.target.reset();
+  renderExpenses();
+});
+
+document.getElementById("expense-list").addEventListener("click", (evt) => {
+  if (!evt.target.classList.contains("delete-expense-btn")) return;
+  const id = Number(evt.target.closest(".expense-item").dataset.id);
+  expenses = expenses.filter((e) => e.id !== id);
+  localStorage.setItem(STORAGE_KEYS.expenses, JSON.stringify(expenses));
+  renderExpenses();
+});
+
+// ── 환율 ────────────────────────────────────────────
+async function fetchRate() {
+  const rateInfo = document.getElementById("rate-info");
+  rateInfo.textContent = "환율 불러오는 중...";
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/JPY");
+    const data = await res.json();
+    if (data.result !== "success") throw new Error("API 실패");
+    jpyToKrwRate = { rate: data.rates.KRW, updatedAt: data.time_last_update_utc };
+    localStorage.setItem(STORAGE_KEYS.rate, JSON.stringify(jpyToKrwRate));
+  } catch (err) {
+    // 오프라인이면 조용히 캐시된 값을 계속 사용
+  }
+  renderRateInfo();
+  renderExpenses();
+}
+
+function renderRateInfo() {
+  const rateInfo = document.getElementById("rate-info");
+  if (jpyToKrwRate) {
+    rateInfo.textContent = `100엔 ≈ ${Math.round(jpyToKrwRate.rate * 100).toLocaleString()}원 (기준: ${jpyToKrwRate.updatedAt})`;
+  } else {
+    rateInfo.textContent = "환율 정보 없음 (오프라인)";
+  }
+}
+
+document.getElementById("refresh-rate-btn").addEventListener("click", fetchRate);
+
+// ── 유틸 ────────────────────────────────────────────
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ── 초기화 ──────────────────────────────────────────
+renderDayTabs();
+renderItinerary();
+renderRateInfo();
+renderExpenses();
+if (!jpyToKrwRate) fetchRate();
+</script>
+</body>
+</html>
