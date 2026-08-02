@@ -174,6 +174,22 @@
     </div>
 
     <div class="card">
+      <label style="font-size:0.9rem;font-weight:bold;">도보 경로 찾기</label>
+      <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
+        저장된 장소가 2개 이상이어야 선택할 수 있습니다. 대중교통(지하철/버스) 경로는 무료로는
+        지원이 안 돼서 도보/직선 거리 기준으로만 보여줍니다.
+      </p>
+      <form class="add-form" id="route-form">
+        <div class="row">
+          <select id="route-from" required></select>
+          <select id="route-to" required></select>
+        </div>
+        <button type="submit">경로 찾기</button>
+      </form>
+      <p id="route-result" style="font-size:0.85rem;color:#555;margin-top:8px;"></p>
+    </div>
+
+    <div class="card">
       <label style="font-size:0.9rem;font-weight:bold;">장소 검색해서 추가</label>
       <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
         구글 계정/API 키 없이 되는 무료 검색(OpenStreetMap)입니다. 검색 버튼을 누를 때만 조회돼요.
@@ -186,16 +202,6 @@
         </div>
       </form>
       <div id="place-search-results"></div>
-    </div>
-
-    <div class="card">
-      <label style="font-size:0.9rem;font-weight:bold;">구글 지도 저장한 장소 가져오기 (선택)</label>
-      <p style="font-size:0.8rem;color:#666;margin:4px 0 8px;">
-        구글 <a href="https://takeout.google.com/" target="_blank" rel="noopener">Takeout</a>에서
-        "지도(내 장소)"만 선택해 내보낸 뒤, 압축을 풀면 나오는 <b>Saved Places.json</b> 파일을 선택하세요.
-      </p>
-      <input type="file" id="places-file-input" accept=".json">
-      <p id="import-status" style="font-size:0.8rem;color:#888;margin-top:6px;"></p>
     </div>
 
     <div class="card">
@@ -468,6 +474,7 @@ document.getElementById("place-search-form").addEventListener("submit", async (e
           localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
           renderSavedPlaces();
           renderPlacesDatalist();
+  renderRouteSelects();
           refreshMarkers();
         }
         resultsEl.innerHTML = `<p class="empty-msg">"${escapeHtml(name)}" 추가 완료! 저장된 장소 목록에서 확인하세요.</p>`;
@@ -480,55 +487,7 @@ document.getElementById("place-search-form").addEventListener("submit", async (e
   }
 });
 
-// ── 지도 / 저장된 장소 가져오기 ───────────────────────────
-// 구글 Takeout의 "Saved Places.json"은 GeoJSON이지만, 내보낸 시점에 따라 필드 이름
-// 대소문자가 조금씩 달랐던 이력이 있어서(location.name / Location["Business Name"] 등)
-// 여러 케이스를 다 시도해본다. 좌표가 [0,0]으로 나오는 건 알려진 Takeout 버그라 걸러낸다.
-function parseTakeoutPlaces(json) {
-  if (!json || !Array.isArray(json.features)) return [];
-  const places = [];
-  for (const feature of json.features) {
-    const coords = feature.geometry && feature.geometry.coordinates;
-    if (!coords || coords.length < 2) continue;
-    const [lng, lat] = coords;
-    if (!lat && !lng) continue;
-
-    const props = feature.properties || {};
-    const loc = props.location || props.Location || {};
-    const name = loc.name || loc["Business Name"] || props.title || props.Title || "이름 없음";
-    const address = loc.address || loc["Address"] || "";
-
-    places.push({ id: `${lat},${lng}`, name, address, lat, lng });
-  }
-  return places;
-}
-
-document.getElementById("places-file-input").addEventListener("change", async (evt) => {
-  const file = evt.target.files[0];
-  if (!file) return;
-  const statusEl = document.getElementById("import-status");
-  try {
-    const json = JSON.parse(await file.text());
-    const parsed = parseTakeoutPlaces(json);
-    if (parsed.length === 0) {
-      statusEl.textContent = "가져올 수 있는 장소가 없습니다. Saved Places.json 파일이 맞는지 확인해주세요.";
-      return;
-    }
-    const existingNames = new Set(savedPlaces.map((p) => p.name));
-    const newOnes = parsed.filter((p) => !existingNames.has(p.name));
-    savedPlaces = savedPlaces.concat(newOnes);
-    localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
-    statusEl.textContent = `${newOnes.length}개 장소를 새로 가져왔습니다 (전체 ${parsed.length}개 중 중복 제외).`;
-    renderSavedPlaces();
-    renderPlacesDatalist();
-    refreshMarkers();
-  } catch (err) {
-    statusEl.textContent = "파일을 읽는 중 오류가 발생했습니다: " + err.message;
-  } finally {
-    evt.target.value = "";
-  }
-});
-
+// ── 저장된 장소 ──────────────────────────────────────────
 function renderSavedPlaces() {
   document.getElementById("saved-places-count").textContent = savedPlaces.length;
   const list = document.getElementById("saved-places-list");
@@ -548,6 +507,12 @@ function renderPlacesDatalist() {
     savedPlaces.map((p) => `<option value="${escapeHtml(p.name)}">`).join("");
 }
 
+function renderRouteSelects() {
+  const options = savedPlaces.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  document.getElementById("route-from").innerHTML = options || `<option value="">저장된 장소 없음</option>`;
+  document.getElementById("route-to").innerHTML = options || `<option value="">저장된 장소 없음</option>`;
+}
+
 document.getElementById("saved-places-list").addEventListener("click", (evt) => {
   if (!evt.target.classList.contains("delete-place-btn")) return;
   const id = evt.target.closest(".saved-place-item").dataset.id;
@@ -555,6 +520,7 @@ document.getElementById("saved-places-list").addEventListener("click", (evt) => 
   localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
   renderSavedPlaces();
   renderPlacesDatalist();
+  renderRouteSelects();
   refreshMarkers();
 });
 
@@ -564,6 +530,7 @@ document.getElementById("clear-places-btn").addEventListener("click", () => {
   localStorage.setItem(STORAGE_KEYS.places, JSON.stringify(savedPlaces));
   renderSavedPlaces();
   renderPlacesDatalist();
+  renderRouteSelects();
   refreshMarkers();
 });
 
@@ -607,6 +574,56 @@ function refreshMarkers() {
   }
 }
 
+// ── 도보 경로 찾기(OSRM 공개 데모 서버, 키/가입 불필요) ─────
+// 공개 데모 서버는 "도보" 프로필을 실제로 지원하지 않고 자동차 기준으로 계산해서(테스트해서
+// 확인함 — 동일 구간 도보/자동차 요청 결과가 완전히 같았음), duration 값은 안 믿고 경로 선과
+// 거리(distance)만 쓴 뒤, 도보 시간은 표준 도보속도(시속 4.5km)로 직접 계산한다.
+const WALK_SPEED_M_PER_MIN = 4500 / 60; // 시속 4.5km
+
+let routeLine = null;
+
+document.getElementById("route-form").addEventListener("submit", async (evt) => {
+  evt.preventDefault();
+  const fromId = document.getElementById("route-from").value;
+  const toId = document.getElementById("route-to").value;
+  const resultEl = document.getElementById("route-result");
+
+  if (!fromId || !toId) return;
+  if (fromId === toId) {
+    resultEl.textContent = "출발지와 도착지가 같습니다.";
+    return;
+  }
+
+  const from = savedPlaces.find((p) => p.id === fromId);
+  const to = savedPlaces.find((p) => p.id === toId);
+  if (!from || !to) return;
+
+  resultEl.textContent = "경로 찾는 중...";
+  try {
+    const url = `https://router.project-osrm.org/route/v1/foot/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.code !== "Ok" || !data.routes || !data.routes[0]) {
+      resultEl.textContent = "경로를 찾을 수 없습니다(도보로 이동 불가능한 구간일 수 있음).";
+      return;
+    }
+
+    const route = data.routes[0];
+    const distanceKm = (route.distance / 1000).toFixed(2);
+    const walkMinutes = Math.round(route.distance / WALK_SPEED_M_PER_MIN);
+    resultEl.textContent = `${from.name} → ${to.name}: 약 ${distanceKm}km, 도보 약 ${walkMinutes}분 (시속 4.5km 기준 추정치, 실제와 다를 수 있음)`;
+
+    if (routeLine) map.removeLayer(routeLine);
+    // OSRM geometry는 [lng, lat] 순서라 Leaflet이 쓰는 [lat, lng]로 뒤집어준다.
+    const latlngs = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+    routeLine = L.polyline(latlngs, { color: "#1565c0", weight: 4, opacity: 0.8 }).addTo(map);
+    map.fitBounds(routeLine.getBounds(), { padding: [24, 24] });
+  } catch (err) {
+    resultEl.textContent = "경로 조회 중 오류가 발생했습니다.";
+  }
+});
+
 // ── 유틸 ────────────────────────────────────────────
 function escapeHtml(text) {
   const div = document.createElement("div");
@@ -621,6 +638,7 @@ renderRateInfo();
 renderExpenses();
 renderSavedPlaces();
 renderPlacesDatalist();
+  renderRouteSelects();
 initMap();
 if (!jpyToKrwRate) fetchRate();
 </script>
