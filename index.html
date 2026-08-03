@@ -107,7 +107,14 @@
 
   <!-- 일정 -->
   <section id="panel-itinerary" class="panel active">
+    <div class="card" style="padding:10px 14px;">
+      <label style="font-size:0.85rem;color:#555;">
+        여행 시작일(Day 1)
+        <input type="date" id="trip-start-date" style="margin-left:6px;">
+      </label>
+    </div>
     <div class="day-tabs" id="day-tabs"></div>
+    <p id="day-weather-info" style="font-size:0.82rem;color:#555;margin:0 2px 10px;"></p>
     <div id="itinerary-list"></div>
 
     <div class="card">
@@ -227,6 +234,7 @@ const STORAGE_KEYS = {
   budgetLimit: "trip_budget_limit_v1",
   rate: "trip_jpy_krw_rate_v1",
   places: "trip_saved_places_v1",
+  startDate: "trip_start_date_v1",
 };
 
 let currentDay = 1;
@@ -234,6 +242,8 @@ let itinerary = JSON.parse(localStorage.getItem(STORAGE_KEYS.itinerary) || "{}")
 let expenses = JSON.parse(localStorage.getItem(STORAGE_KEYS.expenses) || "[]");
 let jpyToKrwRate = JSON.parse(localStorage.getItem(STORAGE_KEYS.rate) || "null");
 let savedPlaces = JSON.parse(localStorage.getItem(STORAGE_KEYS.places) || "[]");
+let weatherData = null;   // Open-Meteo 응답의 daily 블록
+let holidaysData = null;  // { "YYYY-MM-DD": "공휴일 이름" }
 
 // ── 탭 전환 ──────────────────────────────────────────
 document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -252,14 +262,31 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
 });
 
 // ── 일정 ────────────────────────────────────────────
+const tripStartDateInput = document.getElementById("trip-start-date");
+tripStartDateInput.value = localStorage.getItem(STORAGE_KEYS.startDate) || "";
+tripStartDateInput.addEventListener("change", () => {
+  localStorage.setItem(STORAGE_KEYS.startDate, tripStartDateInput.value);
+  renderDayTabs();
+  renderDayWeather();
+});
+
+// Day 1~5를 여행 시작일 기준 실제 날짜(YYYY-MM-DD)로 바꿔준다. 시작일 미입력 시 null.
+function dayToDateStr(dayNum) {
+  if (!tripStartDateInput.value) return null;
+  const d = new Date(tripStartDateInput.value + "T00:00:00");
+  d.setDate(d.getDate() + (dayNum - 1));
+  return d.toISOString().slice(0, 10);
+}
+
 function renderDayTabs() {
   const wrap = document.getElementById("day-tabs");
   wrap.innerHTML = "";
   for (let d = 1; d <= DAY_COUNT; d++) {
     const btn = document.createElement("button");
     btn.className = "day-btn" + (d === currentDay ? " active" : "");
-    btn.textContent = `Day ${d}`;
-    btn.addEventListener("click", () => { currentDay = d; renderDayTabs(); renderItinerary(); });
+    const dateStr = dayToDateStr(d);
+    btn.textContent = `Day ${d}` + (dateStr ? ` (${dateStr.slice(5).replace("-", "/")})` : "");
+    btn.addEventListener("click", () => { currentDay = d; renderDayTabs(); renderItinerary(); renderDayWeather(); });
     wrap.appendChild(btn);
   }
 }
@@ -624,6 +651,67 @@ document.getElementById("route-form").addEventListener("submit", async (evt) => 
   }
 });
 
+// ── 날씨 / 일본 공휴일 (둘 다 키·가입 불필요, 무료 API) ─────
+const WEATHER_ICONS = {
+  0: "☀️ 맑음", 1: "🌤️ 대체로 맑음", 2: "⛅ 구름 조금", 3: "☁️ 흐림",
+  45: "🌫️ 안개", 48: "🌫️ 짙은 안개",
+  51: "🌦️ 약한 이슬비", 53: "🌦️ 이슬비", 55: "🌧️ 강한 이슬비",
+  61: "🌧️ 약한 비", 63: "🌧️ 비", 65: "🌧️ 강한 비",
+  71: "🌨️ 약한 눈", 73: "🌨️ 눈", 75: "❄️ 강한 눈",
+  80: "🌦️ 소나기", 81: "🌧️ 소나기", 82: "⛈️ 강한 소나기",
+  95: "⛈️ 뇌우", 96: "⛈️ 우박 동반 뇌우", 99: "⛈️ 강한 우박 동반 뇌우",
+};
+
+async function fetchWeather() {
+  try {
+    const res = await fetch(
+      "https://api.open-meteo.com/v1/forecast?latitude=35.6812&longitude=139.7671" +
+      "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+      "&timezone=Asia%2FTokyo&forecast_days=16"
+    );
+    const data = await res.json();
+    weatherData = data.daily;
+  } catch (err) {
+    // 오프라인이면 날씨 없이 나머지 기능은 그대로 쓸 수 있게 조용히 넘어간다.
+  }
+}
+
+async function fetchHolidays() {
+  try {
+    const res = await fetch("https://holidays-jp.github.io/api/v1/date.json");
+    holidaysData = await res.json();
+  } catch (err) {
+    // 마찬가지로 조용히 넘어간다.
+  }
+}
+
+function renderDayWeather() {
+  const el = document.getElementById("day-weather-info");
+  const dateStr = dayToDateStr(currentDay);
+  if (!dateStr) {
+    el.textContent = "위에 여행 시작일을 입력하면 그날의 날씨·일본 공휴일 정보가 표시됩니다.";
+    return;
+  }
+
+  const parts = [`📅 ${dateStr}`];
+  if (holidaysData && holidaysData[dateStr]) {
+    parts.push(`🎌 일본 공휴일: ${holidaysData[dateStr]}`);
+  }
+  if (weatherData) {
+    const idx = weatherData.time.indexOf(dateStr);
+    if (idx >= 0) {
+      const desc = WEATHER_ICONS[weatherData.weather_code[idx]] || "🌡️ 정보 없음";
+      parts.push(
+        `${desc} 최고 ${weatherData.temperature_2m_max[idx]}°C / 최저 ${weatherData.temperature_2m_min[idx]}°C` +
+        ` · 강수확률 ${weatherData.precipitation_probability_max[idx]}%`
+      );
+    } else {
+      parts.push("날씨 예보는 아직 안 나온 날짜입니다(보통 오늘부터 16일 이내만 제공)");
+    }
+  }
+  el.textContent = parts.join(" · ");
+}
+
 // ── 유틸 ────────────────────────────────────────────
 function escapeHtml(text) {
   const div = document.createElement("div");
@@ -638,9 +726,12 @@ renderRateInfo();
 renderExpenses();
 renderSavedPlaces();
 renderPlacesDatalist();
-  renderRouteSelects();
+renderRouteSelects();
 initMap();
 if (!jpyToKrwRate) fetchRate();
+
+renderDayWeather();
+Promise.all([fetchWeather(), fetchHolidays()]).then(renderDayWeather);
 </script>
 </body>
 </html>
